@@ -1,7 +1,7 @@
 name: Refresh catalog
 
-# Weekly regeneration of manga.json / anime.json from AniList,
-# consumed by the AniSwipe app (lib/mediaCache.js).
+# Weekly regeneration of manga.json / anime.json from AniList, with French
+# synopses (Claude, Message Batches API), consumed by the Kinetic app.
 on:
   schedule:
     - cron: '0 4 * * 1' # Mondays 04:00 UTC
@@ -17,13 +17,18 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Translation batches usually finish within the hour; the script stops
+    # waiting after 5h and resumes the same batch next run
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+
+      - run: npm ci
 
       - name: Fetch catalog from AniList
         run: node fetch-anilist.js
@@ -31,11 +36,20 @@ jobs:
           OUTPUT_DIR: .
           TARGET: 5000
 
+      # A failure here (no key, API outage) still writes the catalog with the
+      # cached translations, so the commit step runs anyway
+      - name: Translate synopses to French
+        run: node translate-descriptions.mjs
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add manga.json anime.json
+          git add manga.json anime.json translations_fr.json
+          [ -f pending_batch.json ] && git add pending_batch.json || git rm -q --cached --ignore-unmatch pending_batch.json
           if git diff --staged --quiet; then
             echo "Catalog unchanged"
             exit 0

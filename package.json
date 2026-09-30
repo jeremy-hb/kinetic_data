@@ -1,0 +1,17 @@
+{
+  "name": "kinetic-data",
+  "private": true,
+  "description": "Static AniList catalog for the Kinetic app, with French synopses",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "fetch": "node fetch-anilist.js",
+    "translate": "node translate-descriptions.mjs",
+    "translate:sample": "node translate-descriptions.mjs --sample 5"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.130.0"
+  }
+}
