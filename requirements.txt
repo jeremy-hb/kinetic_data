@@ -1,0 +1,5 @@
+# Free local translation (translate_fr.py). torch is installed separately
+# from the CPU-only index in the workflow (much smaller than the CUDA build).
+transformers>=4.40
+sentencepiece
+sacremoses
