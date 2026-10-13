@@ -6,7 +6,7 @@
  *      - recent:   titles started in the last two years, most popular first
  *      - gems:     well rated but below the main pool's popularity floor
  *
- * Canonical copy lives in the jeremy-hb/kinetic_data repo, where a daily
+ * Canonical copy lives in the jeremy-hb/kinetic_data repo, where a weekly
  * GitHub Action regenerates and publishes manga.json / anime.json.
  *
  *   OUTPUT_DIR=. TARGET=5000 node fetch-anilist.js

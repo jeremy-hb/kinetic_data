@@ -1,6 +1,6 @@
 name: Refresh catalog
 
-# Daily regeneration of manga.json / anime.json from AniList, with French
+# Weekly regeneration of manga.json / anime.json from AniList, with French
 # synopses translated by a free open-source model (Opus-MT) on the runner.
 # Consumed by the Kinetic app.
 #
@@ -9,17 +9,10 @@ name: Refresh catalog
 # then the last step marks the run failed so GitHub emails the owner.
 on:
   schedule:
-    - cron: '17 4 * * *' # every day 04:17 UTC (off the hour: less queueing)
+    - cron: '17 4 * * 1' # Mondays 04:17 UTC (weekly: keeps the load on AniList low)
+  # Manual runs only otherwise (Actions → Run workflow): no automatic run when
+  # the scripts change, to keep requests to AniList to the weekly one
   workflow_dispatch:
-  # Also run when the pipeline itself changes (the bot's own data commits
-  # don't touch these paths, so this can't loop)
-  push:
-    branches: [main]
-    paths:
-      - fetch-anilist.js
-      - translate_fr.py
-      - requirements.txt
-      - .github/workflows/refresh-catalog.yml
 
 permissions:
   contents: write
