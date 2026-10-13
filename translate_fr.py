@@ -148,36 +148,53 @@ def main():
     print(f"{len(pending)} synopses to translate")
 
     translated = 0
+    failed = False
     if pending:
-        translator = Translator()
-        deadline = time.time() + MAX_MINUTES * 60
-        started = time.time()
-        for i, m in enumerate(pending, 1):
-            if time.time() > deadline:
-                print(f"Time budget reached: {len(pending) - i + 1} left for the next run")
-                break
-            try:
-                fr = translator.synopsis(m["description"])
-            except Exception as e:  # one bad synopsis must not stop the run
-                print(f"  skipped {m['id']}: {e}")
-                continue
-            cache[str(m["id"])] = {"h": hash_of(m["description"]), "fr": fr}
-            translated += 1
-            if i % CHECKPOINT == 0:
-                save_json(CACHE_FILE, cache)
-                rate = i / (time.time() - started)
-                print(f"  {i}/{len(pending)} — {rate:.1f}/s, ~{(len(pending) - i) / rate / 60:.0f} min left")
+        # Whatever happens here (model download, torch), the cached
+        # translations must still be applied below: otherwise the freshly
+        # fetched catalog would be published without any French synopsis
+        try:
+            translator = Translator()
+            deadline = time.time() + MAX_MINUTES * 60
+            started = time.time()
+            for i, m in enumerate(pending, 1):
+                if time.time() > deadline:
+                    print(f"Time budget reached: {len(pending) - i + 1} left for the next run")
+                    break
+                try:
+                    fr = translator.synopsis(m["description"])
+                except Exception as e:  # one bad synopsis must not stop the run
+                    print(f"  skipped {m['id']}: {e}")
+                    continue
+                cache[str(m["id"])] = {"h": hash_of(m["description"]), "fr": fr}
+                translated += 1
+                if i % CHECKPOINT == 0:
+                    save_json(CACHE_FILE, cache)
+                    rate = i / (time.time() - started)
+                    print(f"  {i}/{len(pending)} — {rate:.1f}/s, ~{(len(pending) - i) / rate / 60:.0f} min left")
+        except Exception as e:
+            print(f"Translation stopped: {e!r}")
+            failed = True
         save_json(CACHE_FILE, cache)
     print(f"{translated} translated")
 
-    # Apply, and drop cache entries for titles no longer in the catalog
+    # Apply, and drop cache entries for titles no longer in the catalog.
+    # The English synopsis is removed once the French one is there: the app
+    # only shows it as a fallback, and it was a quarter of the file size.
     live, applied = set(), 0
     for path, items in catalogs.items():
         for m in items:
             live.add(str(m["id"]))
-            entry = cache.get(str(m["id"])) if m.get("description") else None
-            if entry and entry.get("fr") and entry["h"] == hash_of(m["description"]):
+            description = m.get("description")
+            if not description:
+                # Title kept from a previous catalog (already applied, English
+                # removed) or with no synopsis at all: leave it as it is
+                applied += bool(m.get("description_fr"))
+                continue
+            entry = cache.get(str(m["id"]))
+            if entry and entry.get("fr") and entry["h"] == hash_of(description):
                 m["description_fr"] = entry["fr"]
+                del m["description"]
                 applied += 1
             else:
                 m.pop("description_fr", None)
@@ -187,6 +204,8 @@ def main():
     save_json(CACHE_FILE, cache)
 
     print(f"✅ {applied} titles now have a French synopsis")
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,17 +1,22 @@
 name: Refresh catalog
 
-# Weekly regeneration of manga.json / anime.json from AniList, with French
+# Daily regeneration of manga.json / anime.json from AniList, with French
 # synopses translated by a free open-source model (Opus-MT) on the runner.
 # Consumed by the Kinetic app.
+#
+# A failing step doesn't stop the run: whatever succeeded is still committed
+# (fetch-anilist.js keeps the previous catalog of a type it couldn't fetch),
+# then the last step marks the run failed so GitHub emails the owner.
 on:
   schedule:
-    - cron: '0 4 * * 1' # Mondays 04:00 UTC
+    - cron: '17 4 * * *' # every day 04:17 UTC (off the hour: less queueing)
   workflow_dispatch:
   # Also run when the pipeline itself changes (the bot's own data commits
   # don't touch these paths, so this can't loop)
   push:
     branches: [main]
     paths:
+      - fetch-anilist.js
       - translate_fr.py
       - requirements.txt
       - .github/workflows/refresh-catalog.yml
@@ -25,7 +30,8 @@ concurrency:
 
 jobs:
   refresh:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to Ubuntu 26 from 2026-10-19
+    runs-on: ubuntu-24.04
     # translate_fr.py stops after MAX_MINUTES and saves its progress: the
     # first full translation may take a few runs, later ones only minutes
     timeout-minutes: 350
@@ -34,7 +40,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - uses: actions/setup-python@v5
         with:
@@ -54,6 +60,8 @@ jobs:
           key: hf-opus-mt-en-fr
 
       - name: Fetch catalog from AniList
+        id: fetch
+        continue-on-error: true
         run: node fetch-anilist.js
         env:
           OUTPUT_DIR: .
@@ -62,6 +70,7 @@ jobs:
       # Free and local: no API key. If it fails, the commit step still runs
       # (the catalog is written with the translations already cached)
       - name: Translate synopses to French
+        id: translate
         run: python translate_fr.py
         continue-on-error: true
         env:
@@ -78,3 +87,9 @@ jobs:
           fi
           git commit -m "Refresh catalog $(date -u +%F)"
           git push
+
+      - name: Report problems
+        if: steps.fetch.outcome == 'failure' || steps.translate.outcome == 'failure'
+        run: |
+          echo "::error::fetch=${{ steps.fetch.outcome }} translate=${{ steps.translate.outcome }} — see the logs above (partial results were committed)"
+          exit 1
