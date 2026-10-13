@@ -87,6 +87,14 @@ function buildQuery(filters = {}) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// In GitHub Actions these lines become annotations, shown on the run's
+// summary page: no need to dig through the logs to know what went wrong
+const inCI = !!process.env.GITHUB_ACTIONS;
+const annotate = (level, msg) => console.log(inCI ? `::${level}::${msg}` : `[${level}] ${msg}`);
+
+// Pace between requests; raised for the rest of the run after a 429
+let delay = DELAY;
+
 /** Cut at a sentence end when possible so synopses don't stop mid-word. */
 function shorten(text) {
   if (!text || text.length <= MAX_DESCRIPTION) return text;
@@ -113,9 +121,24 @@ function slim(media) {
   };
 }
 
-/** One page, retried with backoff. Returns null (never throws) when it keeps failing. */
+/** Short, single-line description of a failed response, for the logs and annotations. */
+function describe(res, json) {
+  if (json?.errors) {
+    const errors = Array.isArray(json.errors) ? json.errors.map((e) => e?.message ?? e).join('; ') : json.errors;
+    return `${res?.status ?? 'network'}: ${String(errors).slice(0, 200)}`;
+  }
+  return `HTTP ${res?.status ?? '?'}`;
+}
+
+/**
+ * One page, retried with backoff. Returns { page } or { error } (never throws).
+ * Rate limiting (429) doesn't use up attempts: it's AniList asking us to
+ * slow down, not a failure. It does slow the rest of the run down.
+ */
 async function fetchPage(query, variables) {
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  let lastError = null;
+  let rateLimitWaits = 0;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; ) {
     let res = null;
     let json = null;
     try {
@@ -124,22 +147,28 @@ async function fetchPage(query, variables) {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ query, variables }),
       });
-      if (res.status === 429) {
-        const wait = Number(res.headers.get('retry-after') ?? 60);
-        console.warn(`Rate limited on page ${variables.page}, waiting ${wait}s...`);
+      if (res.status === 429 && rateLimitWaits < 10) {
+        rateLimitWaits++;
+        const wait = Math.max(Number(res.headers.get('retry-after')) || 60, 5);
+        delay = Math.max(delay, 3000); // 20 req/min, under the degraded 30/min
+        console.warn(`Rate limited on page ${variables.page}, waiting ${wait}s (pace now ${delay}ms)`);
         await sleep(wait * 1000 + 500);
         continue;
       }
       json = await res.json().catch(() => null);
-      if (res.ok && json?.data?.Page && !json.errors) return json.data.Page;
+      if (res.ok && json?.data?.Page && !json.errors) return { page: json.data.Page };
     } catch (e) {
       // Network errors (reset, DNS, timeout) used to crash the whole run
-      json = { errors: e?.message ?? String(e) };
+      json = { errors: e?.cause?.code ?? e?.message ?? String(e) };
     }
-    console.warn(`Error on page ${variables.page} (attempt ${attempt}):`, json?.errors ?? res?.status);
+    lastError = describe(res, json);
+    console.warn(`Error on page ${variables.page} (attempt ${attempt}): ${lastError}`);
+    // A query AniList rejects (400: bad argument…) won't work on a retry
+    if (res?.status === 400) break;
     await sleep(Math.min(RETRY_BASE * 2 ** (attempt - 1), 60000));
+    attempt++;
   }
-  return null;
+  return { error: lastError };
 }
 
 /** Up to `limit` titles of one pool. Failed pages are counted and skipped. */
@@ -150,6 +179,7 @@ async function fetchPool(type, { name, limit, sort, filters }) {
   // A few pages of slack: popularity shifts during a long run (duplicates)
   const maxPages = totalPages + 5;
   let failedPages = 0;
+  let lastError = null;
   let consecutiveFails = 0;
   let aborted = false;
   let page = 1;
@@ -159,12 +189,12 @@ async function fetchPool(type, { name, limit, sort, filters }) {
     // Several pages in a row failing means AniList is down: no point waiting
     // ~5 min of retries on each remaining page
     if (consecutiveFails >= 3) {
-      console.warn(`${type} ${name}: ${consecutiveFails} pages failed in a row, giving up`);
+      annotate('warning', `${type} ${name}: ${consecutiveFails} pages failed in a row, giving up (${lastError})`);
       aborted = true;
       break;
     }
     console.log(`${type} ${name} page ${page}/${totalPages} (${byId.size}/${limit})`);
-    const result = await fetchPage(query, { page, type, sort: [sort] });
+    const { page: result, error } = await fetchPage(query, { page, type, sort: [sort] });
     if (result) {
       for (const m of result.media) if (!byId.has(m.id)) byId.set(m.id, slim(m));
       hasNextPage = result.pageInfo?.hasNextPage ?? false;
@@ -172,13 +202,16 @@ async function fetchPool(type, { name, limit, sort, filters }) {
     } else {
       failedPages++;
       consecutiveFails++;
-      console.warn(`${type} ${name}: page ${page} skipped after ${MAX_ATTEMPTS} attempts`);
+      lastError = error;
+      annotate('warning', `${type} ${name}: page ${page} skipped (${error})`);
     }
     page++;
-    await sleep(DELAY);
+    await sleep(delay);
   }
 
-  return { items: [...byId.values()].slice(0, limit), failedPages, totalPages, aborted };
+  const items = [...byId.values()].slice(0, limit);
+  console.log(`${type} ${name}: ${items.length} titles from ${page - 1} pages (${failedPages} failed, last page had next: ${hasNextPage})`);
+  return { items, failedPages, totalPages, aborted, lastError };
 }
 
 function readPrevious(file) {
@@ -195,13 +228,13 @@ function readPrevious(file) {
  * Returns null when the result isn't trustworthy (keep the previous file).
  */
 async function fetchMain(type, previous) {
-  const { items, failedPages, totalPages, aborted } = await fetchPool(type, {
+  const { items, failedPages, totalPages, aborted, lastError } = await fetchPool(type, {
     name: 'main',
     limit: TARGET,
     sort: 'POPULARITY_DESC',
   });
   if (aborted || failedPages > totalPages * 0.1) {
-    console.error(`${type}: ${failedPages}/${totalPages} pages failed`);
+    annotate('error', `${type}: ${failedPages}/${totalPages} pages failed, last error: ${lastError}`);
     return null;
   }
 
@@ -220,7 +253,7 @@ async function fetchMain(type, previous) {
 
   // Refuse to publish a truncated catalog (e.g. AniList outage)
   if (result.length < TARGET * 0.9) {
-    console.error(`${type}: only ${result.length}/${TARGET} titles fetched`);
+    annotate('error', `${type}: only ${result.length}/${TARGET} titles fetched (${failedPages} failed pages)`);
     return null;
   }
   return { items: result, degraded: failedPages > 0 };
@@ -257,6 +290,7 @@ async function main() {
         added++;
       }
       console.log(`${type} ${pool.name}: +${added} titles`);
+      if (inCI) annotate('notice', `${type} ${pool.name}: ${items.length} fetched, +${added} new`);
     }
 
     fs.writeFileSync(file, JSON.stringify(catalog));
@@ -264,7 +298,7 @@ async function main() {
   }
 
   if (problems.length > 0) {
-    console.error(`\n⚠️  Completed with problems:\n- ${problems.join('\n- ')}`);
+    for (const p of problems) annotate('error', p);
     process.exitCode = 1;
   }
 }
