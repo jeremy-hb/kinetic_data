@@ -5,6 +5,7 @@
  *      - trending: what's hot right now (TRENDING_DESC)
  *      - recent:   titles started in the last two years, most popular first
  *      - gems:     well rated but below the main pool's popularity floor
+ *      - manhwa:   the most popular Korean comics (manga file only)
  *
  * Canonical copy lives in the jeremy-hb/kinetic_data repo, where a weekly
  * GitHub Action regenerates and publishes manga.json / anime.json.
@@ -48,8 +49,10 @@ const EXTRA_POOLS = [
     limit: 500,
     sort: 'SCORE_DESC',
     // popularity_lesser is set to the main pool's floor at run time
-    filters: { averageScore_greater: 74, popularity_greater: 300 },
+    filters: { averageScore_greater: 70, popularity_greater: 300 },
   },
+  // Korean comics (manhwa / webtoons): the main pool is Japanese only
+  { name: 'manhwa', limit: 1000, sort: 'POPULARITY_DESC', country: 'KR', types: ['MANGA'] },
 ];
 
 const FIELDS = `
@@ -57,6 +60,7 @@ const FIELDS = `
   title { romaji english }
   coverImage { extraLarge large }
   genres
+  countryOfOrigin
   startDate { year month day }
   status
   averageScore
@@ -69,7 +73,7 @@ const FIELDS = `
   tags { name rank isMediaSpoiler }
 `;
 
-function buildQuery(filters = {}) {
+function buildQuery(filters = {}, country = 'JP') {
   const extra = Object.entries(filters)
     .map(([key, value]) => `${key}: ${value}`)
     .join(', ');
@@ -77,7 +81,7 @@ function buildQuery(filters = {}) {
     query ($page: Int, $type: MediaType, $sort: [MediaSort]) {
       Page(page: $page, perPage: ${PER_PAGE}) {
         pageInfo { hasNextPage }
-        media(type: $type, sort: $sort, isAdult: false, countryOfOrigin: "JP"${extra ? `, ${extra}` : ''}) {
+        media(type: $type, sort: $sort, isAdult: false, countryOfOrigin: "${country}"${extra ? `, ${extra}` : ''}) {
           ${FIELDS}
         }
       }
@@ -172,8 +176,8 @@ async function fetchPage(query, variables) {
 }
 
 /** Up to `limit` titles of one pool. Failed pages are counted and skipped. */
-async function fetchPool(type, { name, limit, sort, filters }) {
-  const query = buildQuery(filters);
+async function fetchPool(type, { name, limit, sort, filters, country }) {
+  const query = buildQuery(filters, country);
   const byId = new Map();
   const totalPages = Math.ceil(limit / PER_PAGE);
   // A few pages of slack: popularity shifts during a long run (duplicates)
@@ -278,7 +282,7 @@ async function main() {
     const ids = new Set(catalog.map((m) => m.id));
     const floor = Math.min(...catalog.map((m) => m.popularity ?? Infinity));
 
-    for (const pool of EXTRA_POOLS) {
+    for (const pool of EXTRA_POOLS.filter((p) => !p.types || p.types.includes(type))) {
       const filters = pool.name === 'gems' ? { ...pool.filters, popularity_lesser: floor } : pool.filters;
       const { items, failedPages } = await fetchPool(type, { ...pool, filters });
       if (failedPages > 0) problems.push(`${type} ${pool.name}: ${failedPages} pages skipped`);
