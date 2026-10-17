@@ -3,7 +3,7 @@
 Static catalog for the Kinetic app, one JSON array per type (`manga.json`, `anime.json`), built from [AniList](https://anilist.co) (no adult content):
 
 1. the 5,000 most popular Japanese titles,
-2. then, appended after them: the 300 trending titles, the 500 most popular titles started in the last two years, 500 "gems" (average score above 70 but less popular than the 5,000th title) and, in `manga.json` only, the 1,000 most popular Korean comics (manhwa). Titles already in the catalog are skipped. Each title carries its `countryOfOrigin` (`JP`, `KR`).
+2. then, appended after them: the 300 trending titles, the 500 most popular titles started in the last two years, 500 "gems" (average score above 70 but less popular than the 5,000th title) and, in `manga.json` only, the 1,000 most popular Korean comics (manhwa) and the 500 most popular Chinese comics (manhua). Titles already in the catalog are skipped. Each title carries its `countryOfOrigin` (`JP`, `KR`, `CN`): Kinetic's WEBTOON filter keeps the `KR` / `CN` ones.
 
 - `manga.json`, `anime.json` — read by the app from `raw.githubusercontent.com` kept on the device, which checks every 2 days whether the file changed (ETag).
 - `fetch-anilist.js` — generator (Node 18+). `OUTPUT_DIR=. TARGET=5000 node fetch-anilist.js`
