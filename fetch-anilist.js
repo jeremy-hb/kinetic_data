@@ -6,6 +6,7 @@
  *      - recent:   titles started in the last two years, most popular first
  *      - gems:     well rated but below the main pool's popularity floor
  *      - manhwa:   the most popular Korean comics (manga file only)
+ *      - manhua:   the most popular Chinese comics (manga file only)
  *
  * Canonical copy lives in the jeremy-hb/kinetic_data repo, where a weekly
  * GitHub Action regenerates and publishes manga.json / anime.json.
@@ -53,6 +54,9 @@ const EXTRA_POOLS = [
   },
   // Korean comics (manhwa / webtoons): the main pool is Japanese only
   { name: 'manhwa', limit: 1000, sort: 'POPULARITY_DESC', country: 'KR', types: ['MANGA'] },
+  // Chinese comics (manhua, mostly webtoons too): the app's WEBTOON filter
+  // shows Korean and Chinese titles (countryOfOrigin KR / CN / TW)
+  { name: 'manhua', limit: 500, sort: 'POPULARITY_DESC', country: 'CN', types: ['MANGA'] },
 ];
 
 const FIELDS = `
